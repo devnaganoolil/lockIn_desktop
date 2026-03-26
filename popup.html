@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { width: 350px; padding: 10px; font-family: Arial, sans-serif; }
+    .site-row { margin-bottom: 8px; display: flex; gap: 5px; align-items: center; }
+    .site-row input { flex: 2; padding: 5px; }
+    .site-row input[type="number"] { width: 60px; }
+    .remove-btn { background: red; color: white; border: none; cursor: pointer; padding: 5px 8px; }
+    .add-btn { margin: 10px 0; padding: 5px 10px; background: #4CAF50; color: white; border: none; cursor: pointer; }
+    .site-list { margin-top: 15px; }
+    h3 { margin: 0 0 10px 0; }
+    .message { margin-top: 10px; padding: 5px; background: #f0f0f0; border-radius: 3px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h3>Website Time Limits</h3>
+  <div id="sites-container"></div>
+  <button id="add-site" class="add-btn">+ Add Website</button>
+  <div id="status" class="message"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
