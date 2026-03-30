@@ -29,7 +29,29 @@ function renderSites() {
     input.addEventListener('change', (e) => {
       const idx = e.target.dataset.index;
       const field = e.target.dataset.field;
+      // Capture old value BEFORE mutating sites[]
+      const oldValue = sites[idx][field];
       sites[idx][field] = e.target.value;
+
+      // If the time limit was extended on an already-blocked site,
+      // clear the block and store only the DIFFERENCE as bonus time
+      if (field === 'timeLimit') {
+        const newMinutes = parseInt(e.target.value, 10);
+        const oldMinutes = parseInt(oldValue, 10);
+        if (!isNaN(newMinutes) && !isNaN(oldMinutes) && newMinutes > oldMinutes) {
+          const siteUrl = sites[idx].url;
+          const extraMinutes = newMinutes - oldMinutes;
+          chrome.storage.local.get(['blockedState'], (result) => {
+            const blockedState = result.blockedState || {};
+            if (blockedState[siteUrl]) {
+              delete blockedState[siteUrl];
+              // Store the difference so background.js uses it instead of the full limit
+              chrome.storage.local.set({ blockedState, [`bonusTime_${siteUrl}`]: extraMinutes });
+            }
+          });
+        }
+      }
+
       saveSites();
     });
   });

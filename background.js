@@ -90,33 +90,46 @@ function checkTab(tab) {
       return;
     }
 
-    // New site or different site — start fresh
+    // New site or different site - start fresh
     if (activeTimers[tab.id]) {
       clearTimerForTab(tab.id);
     }
 
-    let timeLimitMinutes = parseInt(siteEntry.timeLimit, 10);
-    if (isNaN(timeLimitMinutes) || timeLimitMinutes <= 0) {
-      console.warn(`Invalid time limit for ${siteEntry.url}, using default 5 minutes.`);
-      timeLimitMinutes = 5;
-    }
+    // Check for bonus time (set when user extends the limit after it expired)
+    // Only the difference is granted, not the full new limit
+    const bonusKey = `bonusTime_${siteEntry.url}`;
+    chrome.storage.local.get([bonusKey], (bonusResult) => {
+      let timeLimitMinutes;
+      if (bonusResult[bonusKey] !== undefined) {
+        timeLimitMinutes = parseInt(bonusResult[bonusKey], 10);
+        chrome.storage.local.remove(bonusKey); // consume it so it only applies once
+        console.log(`Using bonus time of ${timeLimitMinutes} min for ${siteEntry.url}`);
+      } else {
+        timeLimitMinutes = parseInt(siteEntry.timeLimit, 10);
+      }
 
-    const timerEnd = Date.now() + timeLimitMinutes * 60 * 1000;
-    const alarmName = `timer_${tab.id}`;
-    chrome.alarms.create(alarmName, { when: timerEnd });
-    activeTimers[tab.id] = {
-      site: siteEntry.url,
-      timerEnd,
-      timeLimit: timeLimitMinutes,
-      alarmName
-    };
+      if (isNaN(timeLimitMinutes) || timeLimitMinutes <= 0) {
+        console.warn(`Invalid time limit for ${siteEntry.url}, using default 5 minutes.`);
+        timeLimitMinutes = 5;
+      }
 
-    chrome.tabs.sendMessage(tab.id, {
-      action: 'start_countdown',
-      endTime: timerEnd
-    }).catch(() => {});
+      const timerEnd = Date.now() + timeLimitMinutes * 60 * 1000;
+      const alarmName = `timer_${tab.id}`;
+      chrome.alarms.create(alarmName, { when: timerEnd });
+      activeTimers[tab.id] = {
+        site: siteEntry.url,
+        timerEnd,
+        timeLimit: timeLimitMinutes,
+        alarmName
+      };
 
-    console.log(`Started timer for tab ${tab.id} on ${hostname} for ${timeLimitMinutes} min`);
+      chrome.tabs.sendMessage(tab.id, {
+        action: 'start_countdown',
+        endTime: timerEnd
+      }).catch(() => {});
+
+      console.log(`Started timer for tab ${tab.id} on ${hostname} for ${timeLimitMinutes} min`);
+    });
   } catch (err) {
     console.error('Error in checkTab:', err);
   }
