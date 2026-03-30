@@ -105,9 +105,8 @@ function showBlockOverlay(msg) {
     const btn = document.getElementById('unblock-btn');
     if (btn) {
       btn.addEventListener('click', () => {
-        removeBlockOverlay();
-        // Tell background to restart timer for this tab
-        chrome.runtime.sendMessage({ action: 'restartTimer' });
+        // Close the tab entirely
+        chrome.runtime.sendMessage({ action: 'closeTab' });
       });
     } else {
       console.error('Unblock button not found in overlay');
