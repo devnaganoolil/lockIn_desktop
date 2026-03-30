@@ -1,69 +1,110 @@
 let sites = [];
 
-// Load saved sites when popup opens
-chrome.storage.local.get(['blockedSites'], (result) => {
-  if (result.blockedSites) {
-    sites = result.blockedSites;
-    renderSites();
-  } else {
-    renderSites(); // empty list
-  }
+chrome.storage.local.get(['blockedSites', 'blockedState'], (result) => {
+  sites = result.blockedSites || [];
+  renderSites(result.blockedState || {});
 });
 
-function renderSites() {
+function renderSites(blockedStateOverride) {
   const container = document.getElementById('sites-container');
   container.innerHTML = '';
-  sites.forEach((site, index) => {
-    const row = document.createElement('div');
-    row.className = 'site-row';
-    row.innerHTML = `
-      <input type="text" placeholder="e.g., facebook.com" value="${site.url}" data-index="${index}" data-field="url">
-      <input type="number" placeholder="Minutes" value="${site.timeLimit}" data-index="${index}" data-field="timeLimit" min="1">
-      <button class="remove-btn" data-index="${index}">X</button>
-    `;
-    container.appendChild(row);
-  });
 
-  // Attach event listeners to inputs and buttons
-  document.querySelectorAll('.site-row input').forEach(input => {
-    input.addEventListener('change', (e) => {
-      const idx = e.target.dataset.index;
-      const field = e.target.dataset.field;
-      // Capture old value BEFORE mutating sites[]
-      const oldValue = sites[idx][field];
-      sites[idx][field] = e.target.value;
+  if (sites.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🌐</div>
+        <p>No sites added yet.<br>Click <strong>Add Website</strong> to get started.</p>
+      </div>`;
+    return;
+  }
 
-      // If the time limit was extended on an already-blocked site,
-      // clear the block and store only the DIFFERENCE as bonus time
-      if (field === 'timeLimit') {
-        const newMinutes = parseInt(e.target.value, 10);
-        const oldMinutes = parseInt(oldValue, 10);
-        if (!isNaN(newMinutes) && !isNaN(oldMinutes) && newMinutes > oldMinutes) {
-          const siteUrl = sites[idx].url;
-          const extraMinutes = newMinutes - oldMinutes;
-          chrome.storage.local.get(['blockedState'], (result) => {
-            const blockedState = result.blockedState || {};
-            if (blockedState[siteUrl]) {
-              delete blockedState[siteUrl];
-              // Store the difference so background.js uses it instead of the full limit
-              chrome.storage.local.set({ blockedState, [`bonusTime_${siteUrl}`]: extraMinutes });
-            }
-          });
+  const render = (blockedState) => {
+    container.innerHTML = '';
+    sites.forEach((site, index) => {
+      const isBlocked = !!(site.url && blockedState[site.url]);
+
+      const card = document.createElement('div');
+      card.className = 'site-card';
+      card.innerHTML = `
+        <div class="card-row">
+          <div class="field-wrap">
+            <label>Website</label>
+            <input type="text" placeholder="e.g. facebook.com"
+              value="${site.url}" data-index="${index}" data-field="url">
+          </div>
+          <div class="field-wrap time-wrap">
+            <label>Minutes</label>
+            <input type="number" placeholder="5" min="1"
+              value="${site.timeLimit}" data-index="${index}" data-field="timeLimit">
+          </div>
+          <button class="remove-btn" data-index="${index}" title="Remove">✕</button>
+        </div>
+        ${site.url ? `
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span class="status-badge ${isBlocked ? 'blocked' : ''}">
+            ${isBlocked ? 'Blocked' : 'Active'}
+          </span>
+          ${isBlocked ? '<span style="font-size:10px;color:var(--muted)">Extend time limit to unblock</span>' : ''}
+        </div>` : ''}
+      `;
+      container.appendChild(card);
+    });
+
+    document.querySelectorAll('.site-card input').forEach(input => {
+      input.addEventListener('change', (e) => {
+        const idx = parseInt(e.target.dataset.index);
+        const field = e.target.dataset.field;
+        const oldValue = sites[idx][field];
+        sites[idx][field] = e.target.value;
+
+        if (field === 'timeLimit') {
+          const newMinutes = parseInt(e.target.value, 10);
+          const oldMinutes = parseInt(oldValue, 10);
+          if (!isNaN(newMinutes) && !isNaN(oldMinutes) && newMinutes > oldMinutes) {
+            const siteUrl = sites[idx].url;
+            const extraMinutes = newMinutes - oldMinutes;
+            chrome.storage.local.get(['blockedState'], (result) => {
+              const bs = result.blockedState || {};
+              if (bs[siteUrl]) {
+                delete bs[siteUrl];
+                chrome.storage.local.set(
+                  { blockedState: bs, [`bonusTime_${siteUrl}`]: extraMinutes },
+                  () => saveSites(true)
+                );
+                return;
+              }
+              saveSites(true);
+            });
+            return;
+          }
         }
-      }
 
-      saveSites();
+        saveSites(true);
+      });
     });
-  });
 
-  document.querySelectorAll('.remove-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const idx = e.target.dataset.index;
-      sites.splice(idx, 1);
-      renderSites();
-      saveSites();
+    document.querySelectorAll('.remove-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const idx = parseInt(e.target.dataset.index);
+        const siteUrl = sites[idx].url;
+        sites.splice(idx, 1);
+        chrome.storage.local.get(['blockedState'], (result) => {
+          const bs = result.blockedState || {};
+          if (siteUrl && bs[siteUrl]) {
+            delete bs[siteUrl];
+            chrome.storage.local.set({ blockedState: bs });
+          }
+        });
+        saveSites(false);
+      });
     });
-  });
+  };
+
+  if (blockedStateOverride !== undefined) {
+    render(blockedStateOverride);
+  } else {
+    chrome.storage.local.get(['blockedState'], (r) => render(r.blockedState || {}));
+  }
 }
 
 document.getElementById('add-site').addEventListener('click', () => {
@@ -71,10 +112,11 @@ document.getElementById('add-site').addEventListener('click', () => {
   renderSites();
 });
 
-function saveSites() {
+function saveSites(rerender = true) {
   chrome.storage.local.set({ blockedSites: sites }, () => {
     const status = document.getElementById('status');
-    status.textContent = 'Saved!';
-    setTimeout(() => { status.textContent = ''; }, 2000);
+    status.classList.add('visible');
+    setTimeout(() => status.classList.remove('visible'), 1800);
+    if (rerender) renderSites();
   });
 }

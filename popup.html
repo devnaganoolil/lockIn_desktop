@@ -1,23 +1,290 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    body { width: 350px; padding: 10px; font-family: Arial, sans-serif; }
-    .site-row { margin-bottom: 8px; display: flex; gap: 5px; align-items: center; }
-    .site-row input { flex: 2; padding: 5px; }
-    .site-row input[type="number"] { width: 60px; }
-    .remove-btn { background: red; color: white; border: none; cursor: pointer; padding: 5px 8px; }
-    .add-btn { margin: 10px 0; padding: 5px 10px; background: #4CAF50; color: white; border: none; cursor: pointer; }
-    .site-list { margin-top: 15px; }
-    h3 { margin: 0 0 10px 0; }
-    .message { margin-top: 10px; padding: 5px; background: #f0f0f0; border-radius: 3px; font-size: 12px; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f0f13;
+      --surface:   #1a1a22;
+      --border:    #2a2a38;
+      --accent:    #7c6af7;
+      --accent-dim:#4a3fb5;
+      --danger:    #f75a6a;
+      --text:      #e8e8f0;
+      --muted:     #6b6b85;
+      --green:     #4ade80;
+      --radius:    10px;
+    }
+
+    body {
+      width: 360px;
+      min-height: 120px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      padding: 0;
+      overflow-x: hidden;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 18px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-icon {
+      width: 30px;
+      height: 30px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      flex-shrink: 0;
+    }
+
+    .header-text h1 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+      color: var(--text);
+    }
+
+    .header-text p {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 1px;
+    }
+
+    /* ── Site list ── */
+    #sites-container {
+      padding: 10px 12px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 340px;
+      overflow-y: auto;
+    }
+
+    #sites-container::-webkit-scrollbar { width: 4px; }
+    #sites-container::-webkit-scrollbar-track { background: transparent; }
+    #sites-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    /* ── Site card ── */
+    .site-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      animation: slideIn 0.18s ease;
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .card-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .field-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      flex: 1;
+    }
+
+    .field-wrap.time-wrap {
+      flex: 0 0 80px;
+    }
+
+    label {
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    input[type="text"],
+    input[type="number"] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      padding: 6px 9px;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    input[type="text"]::placeholder,
+    input[type="number"]::placeholder {
+      color: var(--muted);
+    }
+
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(124,106,247,0.15);
+    }
+
+    input[type="number"] {
+      -moz-appearance: textfield;
+      text-align: center;
+    }
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+    /* ── Status badge ── */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-weight: 500;
+      padding: 2px 7px;
+      border-radius: 99px;
+      background: rgba(74,222,128,0.12);
+      color: var(--green);
+      border: 1px solid rgba(74,222,128,0.2);
+    }
+
+    .status-badge.blocked {
+      background: rgba(247,90,106,0.12);
+      color: var(--danger);
+      border-color: rgba(247,90,106,0.2);
+    }
+
+    .status-badge::before {
+      content: '';
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* ── Remove button ── */
+    .remove-btn {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      align-self: flex-end;
+    }
+
+    .remove-btn:hover {
+      background: rgba(247,90,106,0.12);
+      color: var(--danger);
+      border-color: rgba(247,90,106,0.3);
+    }
+
+    /* ── Empty state ── */
+    .empty-state {
+      text-align: center;
+      padding: 28px 20px;
+      color: var(--muted);
+    }
+
+    .empty-state .empty-icon {
+      font-size: 28px;
+      margin-bottom: 8px;
+      opacity: 0.5;
+    }
+
+    .empty-state p {
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      padding: 10px 12px 14px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .add-btn {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 14px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 7px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    .add-btn:hover { background: #8f7ff9; }
+    .add-btn:active { transform: scale(0.97); }
+
+    /* ── Toast ── */
+    #status {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--green);
+      min-width: 44px;
+      text-align: right;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    #status.visible { opacity: 1; }
   </style>
 </head>
 <body>
-  <h3>Website Time Limits</h3>
+
+  <div class="header">
+    <div class="header-icon">⏱</div>
+    <div class="header-text">
+      <h1>FocusGuard</h1>
+      <p>Set time limits per website</p>
+    </div>
+  </div>
+
   <div id="sites-container"></div>
-  <button id="add-site" class="add-btn">+ Add Website</button>
-  <div id="status" class="message"></div>
+
+  <div class="footer">
+    <button id="add-site" class="add-btn">
+      <span style="font-size:15px;line-height:1">+</span> Add Website
+    </button>
+    <div id="status">Saved ✓</div>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>
