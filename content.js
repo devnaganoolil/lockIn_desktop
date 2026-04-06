@@ -105,7 +105,7 @@ function showBlockOverlay(msg) {
     const btn = document.getElementById('unblock-btn');
     if (btn) {
       btn.addEventListener('click', () => {
-        // Close the tab entirely
+        removeBlockOverlay();
         chrome.runtime.sendMessage({ action: 'closeTab' });
       });
     } else {

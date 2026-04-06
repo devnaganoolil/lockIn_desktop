@@ -66,9 +66,10 @@ function renderSites(blockedStateOverride) {
             chrome.storage.local.get(['blockedState'], (result) => {
               const bs = result.blockedState || {};
               if (bs[siteUrl]) {
-                delete bs[siteUrl];
-                chrome.storage.local.set(
-                  { blockedState: bs, [`bonusTime_${siteUrl}`]: extraMinutes },
+                // Tell background to unblock the site live on any open tabs
+                // and start the difference countdown automatically
+                chrome.runtime.sendMessage(
+                  { action: 'unblockSite', siteUrl, extraMinutes },
                   () => saveSites(true)
                 );
                 return;
