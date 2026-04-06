@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Site Blocker with Timer",
+  "name": "Clocked",
   "version": "1.0",
-  "description": "Block websites after a set time limit",
+  "description": "Block websites after a set time limit — Clocked",
   "permissions": [
     "storage",
     "tabs",
-    "alarms"
+    "alarms",
+    "windows"
   ],
   "host_permissions": [
     "<all_urls>"

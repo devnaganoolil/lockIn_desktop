@@ -1,6 +1,4 @@
-// activeTimers is now keyed by siteUrl, not tabId.
-// One shared timer per site — all tabs of instagram.com share the same countdown.
-let activeTimers = {}; // siteUrl -> { timerEnd, timeLimit, alarmName }
+let activeTimers = {}; // tabId -> { site, timerEnd, timeLimit, alarmName }
 
 let blockedSites = [];
 let blockedState = {}; // { [siteUrl]: true } — persisted so refreshes stay blocked
@@ -14,20 +12,47 @@ chrome.storage.local.get(['blockedSites', 'blockedState'], (result) => {
 
 // Listen for storage changes
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local') {
-    if (changes.blockedSites) {
-      blockedSites = changes.blockedSites.newValue || [];
-      // Re-check all tabs — checkTab handles cleanup naturally
-      chrome.tabs.query({}, (tabs) => {
-        tabs.forEach(tab => checkTab(tab));
+  if (area !== 'local') return;
+
+  if (changes.blockedSites) {
+    const oldSites = changes.blockedSites.oldValue || [];
+    const newSites = changes.blockedSites.newValue || [];
+    blockedSites = newSites;
+
+    // Find sites whose timeLimit changed or were removed.
+    // Their persisted timerState_<tabId> must be wiped so checkTab
+    // doesn't resume the old countdown with the wrong duration.
+    const changedUrls = new Set();
+    oldSites.forEach(oldSite => {
+      const newSite = newSites.find(s => s.url === oldSite.url);
+      if (!newSite || String(newSite.timeLimit) !== String(oldSite.timeLimit)) {
+        changedUrls.add(oldSite.url.trim());
+      }
+    });
+
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach(tab => {
+        if (!tab.url || changedUrls.size === 0) return;
+        try {
+          const hostname = new URL(tab.url).hostname;
+          changedUrls.forEach(siteUrl => {
+            if (hostname.includes(siteUrl)) {
+              clearTimerForTab(tab.id); // wipes memory + timerState_<tabId> from storage
+            }
+          });
+        } catch (e) {}
       });
-    }
-    if (changes.blockedState) {
-      blockedState = changes.blockedState.newValue || {};
-    }
+      // Re-check all tabs — they'll now start fresh with the correct limit
+      tabs.forEach(tab => checkTab(tab));
+    });
+  }
+
+  if (changes.blockedState) {
+    blockedState = changes.blockedState.newValue || {};
   }
 });
 
+// Check when a tab is updated or activated
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete') {
     checkTab(tab);
@@ -40,13 +65,16 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   });
 });
 
-// Timer belongs to the site, not the tab — nothing to do on tab close
-chrome.tabs.onRemoved.addListener((tabId) => {});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  clearTimerForTab(tabId);
+});
 
-// Messages from content scripts and popup
+// Listen for messages from content scripts and popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'closeTab') {
     const tabId = sender.tab.id;
+    console.log(`Closing tab ${tabId}`);
+    clearTimerForTab(tabId);
     chrome.tabs.remove(tabId);
     sendResponse({ success: true });
   }
@@ -57,21 +85,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const bs = result.blockedState || {};
       delete bs[siteUrl];
       blockedState = bs;
-
-      // Clear the site-level timer so a fresh one starts with bonus time
-      clearTimerForSite(siteUrl);
-
       const storageUpdate = { blockedState: bs };
       if (extraMinutes > 0) storageUpdate[`bonusTime_${siteUrl}`] = extraMinutes;
-
       chrome.storage.local.set(storageUpdate, () => {
-        // Unblock and restart timer on all matching tabs
         chrome.tabs.query({}, (tabs) => {
           tabs.forEach(tab => {
             if (!tab.url) return;
             try {
               const hostname = new URL(tab.url).hostname;
               if (!hostname.includes(siteUrl.trim())) return;
+              clearTimerForTab(tab.id);
               chrome.tabs.sendMessage(tab.id, { action: 'unblock' }).catch(() => {});
               checkTab(tab);
             } catch (e) {}
@@ -80,35 +103,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     });
     sendResponse({ success: true });
-  }
-
-  if (message.action === 'restartTimer') {
-    // User clicked "Continue" — clear blocked state and restart the site timer
-    if (!sender.tab?.url) { sendResponse({ success: false }); return; }
-    try {
-      const hostname = new URL(sender.tab.url).hostname;
-      const siteEntry = blockedSites.find(s => hostname.includes(s.url.trim()));
-      if (siteEntry) {
-        clearTimerForSite(siteEntry.url);
-        delete blockedState[siteEntry.url];
-        chrome.storage.local.set({ blockedState });
-        // Re-check all matching tabs so they all get the new countdown
-        chrome.tabs.query({}, (tabs) => {
-          tabs.forEach(tab => {
-            if (!tab.url) return;
-            try {
-              if (new URL(tab.url).hostname.includes(siteEntry.url.trim())) {
-                checkTab(tab);
-              }
-            } catch (e) {}
-          });
-        });
-      }
-      sendResponse({ success: true });
-    } catch (e) {
-      console.error('restartTimer error:', e);
-      sendResponse({ success: false });
-    }
   }
 });
 
@@ -120,13 +114,15 @@ function checkTab(tab) {
 
     const siteEntry = blockedSites.find(s => hostname.includes(s.url.trim()));
     if (!siteEntry) {
+      clearTimerForTab(tab.id);
       chrome.tabs.sendMessage(tab.id, { action: 'unblock' }).catch(() => {});
       return;
     }
 
-    // Re-block immediately if this site is in the persisted blocked state
+    // If this site is persisted as blocked, re-block on every page load/refresh.
     if (blockedState[siteEntry.url]) {
       console.log(`Site ${siteEntry.url} is blocked, re-blocking tab ${tab.id}`);
+      clearTimerForTab(tab.id);
       setTimeout(() => {
         chrome.tabs.sendMessage(tab.id, {
           action: 'block',
@@ -136,16 +132,22 @@ function checkTab(tab) {
       return;
     }
 
-    // Check storage for a live site-level timer (handles SW restarts)
-    const timerKey = `timerState_${siteEntry.url}`;
+    // Key fix: check persisted timer state in storage, not just in-memory activeTimers.
+    // This handles same-site navigation AND service worker restarts — both wipe activeTimers.
+    const timerKey = `timerState_${tab.id}`;
     chrome.storage.local.get([timerKey], (timerResult) => {
       const persisted = timerResult[timerKey];
 
-      if (persisted && persisted.timerEnd > Date.now()) {
-        console.log(`Resuming shared timer for ${siteEntry.url} on tab ${tab.id}`);
-        if (!activeTimers[siteEntry.url]) {
-          activeTimers[siteEntry.url] = persisted;
+      // If there's a live persisted timer for this tab+site, just resume the countdown.
+      // Do NOT start a new timer — this is the core fix for navigation resets.
+      if (persisted && persisted.site === siteEntry.url && persisted.timerEnd > Date.now()) {
+        console.log(`Resuming existing timer for tab ${tab.id} on ${siteEntry.url}`);
+
+        // Restore into memory so alarm handler still works
+        if (!activeTimers[tab.id]) {
+          activeTimers[tab.id] = persisted;
         }
+
         chrome.tabs.sendMessage(tab.id, {
           action: 'start_countdown',
           endTime: persisted.timerEnd
@@ -153,16 +155,20 @@ function checkTab(tab) {
         return;
       }
 
-      // In-memory timer still live (same SW session)
-      if (activeTimers[siteEntry.url] && activeTimers[siteEntry.url].timerEnd > Date.now()) {
+      // No live timer — check if one is already in memory (fast path, same session)
+      if (activeTimers[tab.id] && activeTimers[tab.id].site === siteEntry.url) {
         chrome.tabs.sendMessage(tab.id, {
           action: 'start_countdown',
-          endTime: activeTimers[siteEntry.url].timerEnd
+          endTime: activeTimers[tab.id].timerEnd
         }).catch(() => {});
         return;
       }
 
-      // No active timer — start a fresh one for this site
+      // Genuinely new — start a fresh timer
+      if (activeTimers[tab.id]) {
+        clearTimerForTab(tab.id);
+      }
+
       const bonusKey = `bonusTime_${siteEntry.url}`;
       chrome.storage.local.get([bonusKey], (bonusResult) => {
         let timeLimitMinutes;
@@ -180,32 +186,21 @@ function checkTab(tab) {
         }
 
         const timerEnd = Date.now() + timeLimitMinutes * 60 * 1000;
-        const alarmName = `sitetimer_${siteEntry.url.replace(/\./g, '_')}`;
+        const alarmName = `timer_${tab.id}`;
+        chrome.alarms.create(alarmName, { when: timerEnd });
 
-        chrome.alarms.clear(alarmName, () => {
-          chrome.alarms.create(alarmName, { when: timerEnd });
-        });
+        const timerState = { site: siteEntry.url, timerEnd, timeLimit: timeLimitMinutes, alarmName };
+        activeTimers[tab.id] = timerState;
 
-        const timerState = { siteUrl: siteEntry.url, timerEnd, timeLimit: timeLimitMinutes, alarmName };
-        activeTimers[siteEntry.url] = timerState;
+        // Persist so same-site navigation and service worker restarts can resume it
         chrome.storage.local.set({ [timerKey]: timerState });
 
-        // Send countdown to ALL open tabs of this site at once
-        chrome.tabs.query({}, (tabs) => {
-          tabs.forEach(t => {
-            if (!t.url) return;
-            try {
-              if (new URL(t.url).hostname.includes(siteEntry.url.trim())) {
-                chrome.tabs.sendMessage(t.id, {
-                  action: 'start_countdown',
-                  endTime: timerEnd
-                }).catch(() => {});
-              }
-            } catch (e) {}
-          });
-        });
+        chrome.tabs.sendMessage(tab.id, {
+          action: 'start_countdown',
+          endTime: timerEnd
+        }).catch(() => {});
 
-        console.log(`Started shared timer for ${siteEntry.url}: ${timeLimitMinutes} min`);
+        console.log(`Started timer for tab ${tab.id} on ${hostname} for ${timeLimitMinutes} min`);
       });
     });
   } catch (err) {
@@ -213,56 +208,69 @@ function checkTab(tab) {
   }
 }
 
-function clearTimerForSite(siteUrl) {
-  if (activeTimers[siteUrl]) {
-    chrome.alarms.clear(activeTimers[siteUrl].alarmName);
-    delete activeTimers[siteUrl];
+function clearTimerForTab(tabId) {
+  if (activeTimers[tabId]) {
+    chrome.alarms.clear(activeTimers[tabId].alarmName);
+    delete activeTimers[tabId];
   }
-  chrome.storage.local.remove(`timerState_${siteUrl}`);
+  // Also clear persisted timer state so a fresh visit starts a new timer
+  chrome.storage.local.remove(`timerState_${tabId}`);
 }
 
-// When the alarm fires, block ALL open tabs of that site
+function clearAllTimers() {
+  Object.keys(activeTimers).forEach(tabId => {
+    clearTimerForTab(parseInt(tabId, 10));
+  });
+}
+
+// When the alarm fires, read directly from storage + tab URL.
 chrome.alarms.onAlarm.addListener((alarm) => {
   console.log('Alarm fired:', alarm.name);
-  if (!alarm.name.startsWith('sitetimer_')) return;
+  const tabIdMatch = alarm.name.match(/timer_(\d+)/);
+  if (!tabIdMatch) return;
+
+  const tabId = parseInt(tabIdMatch[1], 10);
 
   chrome.storage.local.get(['blockedSites', 'blockedState'], (result) => {
     const currentBlockedSites = result.blockedSites || [];
     const currentBlockedState = result.blockedState || {};
 
-    // Match alarm name back to site entry
-    const siteEntry = currentBlockedSites.find(s =>
-      `sitetimer_${s.url.trim().replace(/\./g, '_')}` === alarm.name
-    );
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError || !tab || !tab.url) {
+        console.log(`Tab ${tabId} no longer exists`);
+        delete activeTimers[tabId];
+        chrome.storage.local.remove(`timerState_${tabId}`);
+        return;
+      }
 
-    if (!siteEntry) {
-      console.log(`No site entry found for alarm ${alarm.name}`);
-      return;
-    }
+      try {
+        const hostname = new URL(tab.url).hostname;
+        const siteEntry = currentBlockedSites.find(s => hostname.includes(s.url.trim()));
+        if (!siteEntry) {
+          console.log(`No matching site entry for tab ${tabId}`);
+          delete activeTimers[tabId];
+          chrome.storage.local.remove(`timerState_${tabId}`);
+          return;
+        }
 
-    const siteUrl = siteEntry.url.trim();
-    console.log(`Timer expired for site: ${siteUrl}`);
+        // Persist the blocked state
+        currentBlockedState[siteEntry.url] = true;
+        blockedState = currentBlockedState;
+        chrome.storage.local.set({ blockedState: currentBlockedState });
+        chrome.storage.local.remove(`timerState_${tabId}`);
 
-    // Persist blocked state and clean up timer
-    currentBlockedState[siteUrl] = true;
-    blockedState = currentBlockedState;
-    chrome.storage.local.set({ blockedState: currentBlockedState });
-    chrome.storage.local.remove(`timerState_${siteUrl}`);
-    delete activeTimers[siteUrl];
+        console.log(`Sending block message to tab ${tabId}`);
+        chrome.tabs.sendMessage(tabId, {
+          action: 'block',
+          message: 'Time limit exceeded! Take a break.'
+        }).catch((err) => {
+          console.error('Failed to send block message:', err);
+        });
 
-    // Block every open tab of this site
-    chrome.tabs.query({}, (tabs) => {
-      tabs.forEach(tab => {
-        if (!tab.url) return;
-        try {
-          if (new URL(tab.url).hostname.includes(siteUrl)) {
-            chrome.tabs.sendMessage(tab.id, {
-              action: 'block',
-              message: 'Time limit exceeded! Take a break.'
-            }).catch(() => {});
-          }
-        } catch (e) {}
-      });
+        delete activeTimers[tabId];
+      } catch (err) {
+        console.error('Error in alarm handler:', err);
+      }
     });
   });
 });
