@@ -157,7 +157,7 @@ function renderSites(blockedStateOverride) {
             chrome.storage.local.set({ blockedState: bs });
           }
         });
-        saveSites(false);
+        saveSites(true);
       });
     });
   };
